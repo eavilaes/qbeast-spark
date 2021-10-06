@@ -68,7 +68,7 @@ ThisBuild / resolvers ++= Seq(Resolver.mavenLocal, Resolver.mavenCentral)
 
 // Publication repository
 ThisBuild / publishTo := Some(
-  "Qbeast Spark" at "https://maven.pkg.github.com/Qbeast-io/qbeast-spark")
+  "Qbeast Spark" at "https://maven.pkg.github.com/eavilaes/qbeast-spark")
 
 // GitHub Package Registry credentials
 ThisBuild / credentials += Credentials(
