@@ -18,7 +18,12 @@ jobs:
     - name: Assembly
       run: sbt assembly
     - name: Test
-      run: sbt coverage 'test'
+      run: sbt coverage 'test' coverageReport
+    - name: Codecov
+      run: |
+        curl -Os https://uploader.codecov.io/latest/linux/codecov
+        chmod +x codecov
+        ./codecov -t ${{ secrets.CODECOV_TOKEN }}
     - name: Formatting of code and Scaladocs
       run: sbt scalafmtSbtCheck doc
 
