@@ -38,7 +38,7 @@ trait QbeastIntegrationTestSpec extends AnyFlatSpec with Matchers with DatasetCo
   def withSpark[T](testCode: SparkSession => T): T = {
     val spark = SparkSession
       .builder()
-      .master("local[*]")
+      .master("spark://spark-headless:7077")
       .appName("QbeastDataSource")
       .withExtensions(new QbeastSparkSessionExtension())
       .getOrCreate()
