@@ -3,21 +3,15 @@
  */
 package io.qbeast.spark.delta
 
-import io.qbeast.model.{IndexStatus, QTableID, Weight}
-import io.qbeast.spark.index.OTreeAlgorithmTest.Client3
-import io.qbeast.spark.index.SparkRevisionBuilder
+import io.qbeast.TestClasses.Client3
+import io.qbeast.model.{CubeStatus, IndexStatus, QTableID, Weight}
+import io.qbeast.spark.index.SparkRevisionFactory
+import io.qbeast.spark.utils.TagUtils
 import io.qbeast.spark.{QbeastIntegrationTestSpec, delta}
 import org.apache.spark.sql.delta.DeltaLog
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.scalatest.PrivateMethodTester
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
 
-class QbeastSnapshotTest
-    extends AnyFlatSpec
-    with Matchers
-    with PrivateMethodTester
-    with QbeastIntegrationTestSpec {
+class QbeastSnapshotTest extends QbeastIntegrationTestSpec {
 
   def createDF(size: Int): DataFrame = {
     val spark = SparkSession.active
@@ -34,36 +28,10 @@ class QbeastSnapshotTest
   "CubeNormalizedWeights" should
     "normalize weights when cubes are half full" in withQbeastContextSparkAndTmpDir {
       (spark, tmpDir) =>
-        withOTreeAlgorithm { oTreeAlgorithm =>
-          val cubeSize = 10000
-          val df = createDF(cubeSize / 2).repartition(1)
-          val names = List("age", "val2")
-          // val dimensionCount = names.length
-          df.write
-            .format("qbeast")
-            .mode("overwrite")
-            .options(
-              Map("columnsToIndex" -> names.mkString(","), "cubeSize" -> cubeSize.toString))
-            .save(tmpDir)
-
-          val deltaLog = DeltaLog.forTable(spark, tmpDir)
-          val qbeastSnapshot = DeltaQbeastSnapshot(deltaLog.snapshot)
-          val cubeNormalizedWeights =
-            qbeastSnapshot.loadLatestIndexStatus.cubeNormalizedWeights
-
-          cubeNormalizedWeights.foreach(cubeInfo => cubeInfo._2 shouldBe 2.0)
-        }
-
-    }
-
-  it should "normalize weights when cubes are full" in withQbeastContextSparkAndTmpDir {
-    (spark, tmpDir) =>
-      withOTreeAlgorithm { _ =>
         val cubeSize = 10000
-        val df =
-          createDF(cubeSize).repartition(1)
+        val df = createDF(cubeSize / 2).repartition(1)
         val names = List("age", "val2")
-
+        // val dimensionCount = names.length
         df.write
           .format("qbeast")
           .mode("overwrite")
@@ -71,13 +39,32 @@ class QbeastSnapshotTest
           .save(tmpDir)
 
         val deltaLog = DeltaLog.forTable(spark, tmpDir)
-        val qbeastSnapshot = delta.DeltaQbeastSnapshot(deltaLog.snapshot)
+        val qbeastSnapshot = DeltaQbeastSnapshot(deltaLog.snapshot)
         val cubeNormalizedWeights =
           qbeastSnapshot.loadLatestIndexStatus.cubeNormalizedWeights
 
-        cubeNormalizedWeights.foreach(cubeInfo => cubeInfo._2 shouldBe <(1.0))
-      }
+        cubeNormalizedWeights.foreach(cubeInfo => cubeInfo._2 shouldBe 2.0)
+    }
 
+  it should "normalize weights when cubes are full" in withQbeastContextSparkAndTmpDir {
+    (spark, tmpDir) =>
+      val cubeSize = 10000
+      val df =
+        createDF(cubeSize).repartition(1)
+      val names = List("age", "val2")
+
+      df.write
+        .format("qbeast")
+        .mode("overwrite")
+        .options(Map("columnsToIndex" -> names.mkString(","), "cubeSize" -> cubeSize.toString))
+        .save(tmpDir)
+
+      val deltaLog = DeltaLog.forTable(spark, tmpDir)
+      val qbeastSnapshot = delta.DeltaQbeastSnapshot(deltaLog.snapshot)
+      val cubeNormalizedWeights =
+        qbeastSnapshot.loadLatestIndexStatus.cubeNormalizedWeights
+
+      cubeNormalizedWeights.foreach(cubeInfo => cubeInfo._2 shouldBe 1.0)
   }
 
   "CubeWeights" should
@@ -86,10 +73,10 @@ class QbeastSnapshotTest
         withOTreeAlgorithm { oTreeAlgorithm =>
           val df = createDF(100000)
           val indexStatus = IndexStatus(
-            SparkRevisionBuilder
+            SparkRevisionFactory
               .createNewRevision(
                 QTableID("test"),
-                df,
+                df.schema,
                 Map("columnsToIndex" -> "age,val2", "cubeSize" -> "10000")))
           val (_, tc) = oTreeAlgorithm.index(df, indexStatus)
           val weightMap = tc.indexChanges.cubeWeights
@@ -101,7 +88,7 @@ class QbeastSnapshotTest
 
           val deltaLog = DeltaLog.forTable(spark, tmpDir)
           val qbeastSnapshot = delta.DeltaQbeastSnapshot(deltaLog.snapshot)
-          val commitLogWeightMap = qbeastSnapshot.loadLatestIndexStatus.cubeWeights
+          val commitLogWeightMap = qbeastSnapshot.loadLatestIndexStatus.cubesStatuses
 
           // commitLogWeightMap shouldBe weightMap
           commitLogWeightMap.keys.foreach(cubeId => {
@@ -124,9 +111,9 @@ class QbeastSnapshotTest
 
       val deltaLog = DeltaLog.forTable(spark, tmpDir)
       val qbeastSnapshot = delta.DeltaQbeastSnapshot(deltaLog.snapshot)
-      val cubeWeights = qbeastSnapshot.loadLatestIndexStatus.cubeWeights
+      val cubeWeights = qbeastSnapshot.loadLatestIndexStatus.cubesStatuses
 
-      cubeWeights.foreach { case (_, weight: Weight) =>
+      cubeWeights.values.foreach { case CubeStatus(weight, _, _) =>
         weight shouldBe >(Weight.MinValue)
         weight shouldBe <=(Weight.MaxValue)
       }
@@ -141,30 +128,35 @@ class QbeastSnapshotTest
 
           val df = createDF(100000)
           val names = List("age", "val2")
-
+          val cubeSize = 10000
           df.write
             .format("qbeast")
             .mode("overwrite")
-            .options(Map("columnsToIndex" -> names.mkString(","), "cubeSize" -> "10000"))
+            .options(
+              Map("columnsToIndex" -> names.mkString(","), "cubeSize" -> cubeSize.toString))
             .save(tmpDir)
 
           val deltaLog = DeltaLog.forTable(spark, tmpDir)
           val qbeastSnapshot = DeltaQbeastSnapshot(deltaLog.snapshot)
           val builder =
             new IndexStatusBuilder(qbeastSnapshot, qbeastSnapshot.loadLatestIndexStatus.revision)
-          val revisionState = builder.revisionState
+          val revisionState = builder.buildCubesStatuses
 
-          val overflowed =
-            qbeastSnapshot.loadLatestIndexStatus.overflowedSet
-              .map(_.string)
+          val overflowed = qbeastSnapshot.loadLatestIndexStatus.overflowedSet
+          val fileInfo = qbeastSnapshot.snapshot.allFiles.collect().map(a => (a.path, a)).toMap
 
           revisionState
-            .filter(cubeInfo => overflowed.contains(cubeInfo.cube))
-            .foreach(cubeInfo =>
+            .filter { case (cube, _) => overflowed.contains(cube) }
+            .foreach { case (cube, CubeStatus(weight, _, files)) =>
+              val size = files
+                .map(fileInfo)
+                .map(a => a.tags(TagUtils.elementCount).toLong)
+                .sum
               assert(
-                cubeInfo.size > 1000 * 0.9,
-                "assertion failed in cube " + cubeInfo.cube +
-                  " where size is " + cubeInfo.size + " and weight is " + cubeInfo.maxWeight))
+                size > cubeSize * 0.9,
+                "assertion failed in cube " + cube +
+                  " where size is " + size + " and weight is " + weight)
+            }
         }
     }
 

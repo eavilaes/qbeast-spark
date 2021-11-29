@@ -3,42 +3,14 @@
  */
 package io.qbeast.spark.index
 
+import io.qbeast.TestClasses._
 import io.qbeast.model.QTableID
-import io.qbeast.spark.index.OTreeAlgorithmTest._
 import io.qbeast.spark.index.QbeastColumns._
 import io.qbeast.spark.QbeastIntegrationTestSpec
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.functions._
-import org.scalatest.PrivateMethodTester
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
 
-object OTreeAlgorithmTest {
-  case class Client1(id: Option[Long], name: Option[String], age: Option[Int])
-
-  case class ClientString(id: String, name: String, age: String)
-
-  case class ClientStringOption(id: Option[String], name: Option[String], age: Option[String])
-
-  case class Client2(id: Long, name: String, age: Int)
-
-  case class Client3(id: Long, name: String, age: Int, val2: Long, val3: Double)
-
-  case class Client4(
-      id: Long,
-      name: String,
-      age: Option[Int],
-      val2: Option[Long],
-      val3: Option[Double])
-
-}
-
-class OTreeAlgorithmTest
-    extends AnyFlatSpec
-    with Matchers
-    with PrivateMethodTester
-    with QbeastIntegrationTestSpec {
-  private val addRandomWeight = PrivateMethod[DataFrame]('addRandomWeight)
+class OTreeAlgorithmTest extends QbeastIntegrationTestSpec {
 
   "addRandomWeight" should
     "be deterministic when a row have only nullable columns" in withQbeastContext() {
@@ -114,18 +86,18 @@ class OTreeAlgorithmTest
 
   def checkRDD(df: DataFrame): Unit =
     withQbeastContext() {
-      val rev = SparkRevisionBuilder.createNewRevision(
+      val rev = SparkRevisionFactory.createNewRevision(
         QTableID("test"),
-        df,
+        df.schema,
         Map("columnsToIndex" -> df.columns.mkString(","), "cubeSize" -> "10000"))
 
-      val newDf = DoublePassOTreeDataAnalyzer invokePrivate addRandomWeight(df, rev)
+      val newDf = df.transform(DoublePassOTreeDataAnalyzer.addRandomWeight(rev))
       /* With less than 10k rows the probability of a collision is approximately 0.3%,
     show it should not happen  calculated with
     https://gist.github.com/benhoyt/b59c00fc47361b67bfdedc92e86b03eb#file-birthday_probability-py
        */
 
-      val df2 = DoublePassOTreeDataAnalyzer invokePrivate addRandomWeight(df, rev)
+      val df2 = df.transform(DoublePassOTreeDataAnalyzer.addRandomWeight(rev))
       df2.agg(sum(col(weightColumnName))).first().get(0) shouldBe newDf
         .agg(sum(col(weightColumnName)))
         .first()

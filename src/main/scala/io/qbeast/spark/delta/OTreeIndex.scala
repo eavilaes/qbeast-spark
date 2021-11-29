@@ -3,6 +3,7 @@
  */
 package io.qbeast.spark.delta
 
+import io.qbeast.IISeq
 import io.qbeast.model._
 import io.qbeast.spark.utils.{State, TagUtils}
 import org.apache.spark.sql.catalyst.expressions
@@ -38,7 +39,7 @@ case class OTreeIndex(index: TahoeLogFileIndex)
     dataFilters.partition(e => e.children.head.prettyName.equals("qbeast_hash"))
   }
 
-  private def extractWeightRange(filters: Seq[Expression]): Range[Weight] = {
+  private def extractWeightRange(filters: Seq[Expression]): WeightRange = {
     val min = filters
       .collect { case expressions.GreaterThanOrEqual(_, Literal(m, IntegerType)) =>
         m.asInstanceOf[Int]
@@ -53,7 +54,7 @@ case class OTreeIndex(index: TahoeLogFileIndex)
       .reduceOption(_ max _)
       .getOrElse(Int.MaxValue)
 
-    Range(Weight(min), Weight(max))
+    WeightRange(Weight(min), Weight(max))
   }
 
   override def matchingFiles(
@@ -78,34 +79,27 @@ case class OTreeIndex(index: TahoeLogFileIndex)
    * and find the files that satisfy the predicates
    */
 
-  def sample(weightRange: Range[Weight], files: Seq[AddFile]): Seq[AddFile] = {
+  def sample(weightRange: WeightRange, files: Seq[AddFile]): Seq[AddFile] = {
 
     if (weightRange.to == Weight.MinValue || weightRange.from > weightRange.to) return List.empty
-
-    val filesVector = files.toVector
 
     qbeastSnapshot.loadAllRevisions
       .flatMap(revision => {
 
         val revisionData = qbeastSnapshot.loadIndexStatus(revision.revisionID)
         val dimensionCount = revision.columnTransformers.length
+        val querySpace = AllSpace(dimensionCount)
 
-        val originalFrom = Point(Vector.fill(dimensionCount)(Int.MinValue.doubleValue()))
-        val originalTo = Point(Vector.fill(dimensionCount)(Int.MaxValue.doubleValue()))
-        val querySpace = QuerySpaceFromTo(originalFrom, originalTo, revision)
-
-        val cubeWeights = revisionData.cubeWeights
+        val cubeStatus = revisionData.cubesStatuses
         val replicatedSet = revisionData.replicatedSet
-        val filesRevision =
-          filesVector.filter(_.tags(TagUtils.revision) == revision.revisionID.toString)
 
         findSampleFiles(
           querySpace,
           weightRange,
           CubeId.root(dimensionCount),
-          filesRevision,
-          cubeWeights,
-          replicatedSet)
+          cubeStatus,
+          replicatedSet,
+          files)
       })
 
   }
@@ -116,30 +110,27 @@ case class OTreeIndex(index: TahoeLogFileIndex)
    * @param space the query space
    * @param weightRange the weight range
    * @param startCube the start cube
-   * @param files the data files
-   * @param cubeWeights the cube weights
+   * @param cubesStatuses the cube weights and files
    * @return the files with sample data
    */
   def findSampleFiles(
       space: QuerySpace,
-      weightRange: Range[Weight],
+      weightRange: WeightRange,
       startCube: CubeId,
-      files: Vector[AddFile],
-      cubeWeights: Map[CubeId, Weight],
-      replicatedSet: Set[CubeId]): Vector[AddFile] = {
-
-    def doFindSampleFiles(cube: CubeId): Vector[AddFile] = {
-      cubeWeights.get(cube) match {
-        case Some(cubeWeight) if weightRange.to < cubeWeight =>
-          val cubeString = cube.string
-          files.filter(_.tags(TagUtils.cube) == cubeString)
-        case Some(cubeWeight) =>
-          val cubeString = cube.string
-          val childFiles = cube.children
+      cubesStatuses: Map[CubeId, CubeStatus],
+      replicatedSet: Set[CubeId],
+      previouslyMatchedFiles: Seq[AddFile]): IISeq[AddFile] = {
+    val fileMap = previouslyMatchedFiles.map(a => (a.path, a)).toMap
+    def doFindSampleFiles(cube: CubeId): IISeq[AddFile] = {
+      cubesStatuses.get(cube) match {
+        case Some(CubeStatus(maxWeight, _, files)) if weightRange.to < maxWeight =>
+          files.flatMap(fileMap.get)
+        case Some(CubeStatus(maxWeight, _, files)) =>
+          val childFiles: Iterator[AddFile] = cube.children
             .filter(space.intersectsWith)
             .flatMap(doFindSampleFiles)
-          if (!replicatedSet.contains(cube) && weightRange.from < cubeWeight) {
-            val cubeFiles = files.filter(_.tags(TagUtils.cube) == cubeString)
+          if (!replicatedSet.contains(cube) && weightRange.from < maxWeight) {
+            val cubeFiles = files.flatMap(fileMap.get)
             if (childFiles.nonEmpty) {
               cubeFiles.filterNot(_.tags(TagUtils.state) == State.ANNOUNCED) ++ childFiles
             } else {
@@ -148,7 +139,9 @@ case class OTreeIndex(index: TahoeLogFileIndex)
           } else {
             childFiles.toVector
           }
-        case None => Vector.empty
+        case None =>
+          // TODO how we manage non-existing/empty cubes if the children are present?
+          Vector.empty
       }
     }
 
