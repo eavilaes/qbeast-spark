@@ -3,6 +3,7 @@
  */
 package io.qbeast.spark.index
 
+import io.qbeast.K8sRunner
 import io.qbeast.TestClasses._
 import io.qbeast.model.QTableID
 import io.qbeast.spark.index.QbeastColumns._
@@ -46,13 +47,17 @@ class OTreeAlgorithmTest extends QbeastIntegrationTestSpec {
 
   it should "be deterministic with real data" in withQbeastContext() {
     withSpark { spark =>
-      val inputPath = "src/test/resources/"
-      val file1 = "ecommerce300k_2019_Nov.csv"
+      var path = "ecommerce300K_2019_Nov.csv"
+      if (K8sRunner.isWasb) {
+        path = "wasb://datasets@blobqsql.blob.core.windows.net/" + path
+      } else {
+        path = "src/test/resources/" + path
+      }
       val df = spark.read
         .format("csv")
         .option("header", "true")
         .option("inferSchema", "true")
-        .load(inputPath + file1)
+        .load(path)
         .distinct()
       checkRDD(df)
     }

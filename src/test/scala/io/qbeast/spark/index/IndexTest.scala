@@ -3,6 +3,7 @@
  */
 package io.qbeast.spark.index
 
+import io.qbeast.K8sRunner
 import io.qbeast.TestClasses.{Client3, Client4}
 import io.qbeast.model._
 import io.qbeast.spark.index.IndexTestChecks._
@@ -131,13 +132,17 @@ class IndexTest extends AnyFlatSpec with Matchers with QbeastIntegrationTestSpec
   it should "work with real data" in withSpark { spark =>
     withOTreeAlgorithm { oTreeAlgorithm =>
       {
-        val inputPath = "src/test/resources/"
-        val file1 = "ecommerce100K_2019_Oct.csv"
+        var path = "ecommerce100K_2019_Oct.csv"
+        if (K8sRunner.isWasb) {
+          path = "wasb://datasets@blobqsql.blob.core.windows.net/" + path
+        } else {
+          path = "src/test/resources/" + path
+        }
         val df = spark.read
           .format("csv")
           .option("header", "true")
           .option("inferSchema", "true")
-          .load(inputPath + file1)
+          .load(path)
           .distinct()
 
         val rev = SparkRevisionFactory.createNewRevision(

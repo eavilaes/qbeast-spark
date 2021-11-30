@@ -3,6 +3,7 @@
  */
 package io.qbeast.spark.utils
 
+import io.qbeast.K8sRunner
 import io.qbeast.model.CubeId
 import io.qbeast.spark.{QbeastIntegrationTestSpec, QbeastTable}
 import io.qbeast.spark.delta.OTreeIndex
@@ -11,12 +12,20 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 
 class QbeastDataSourceIntegrationTest extends QbeastIntegrationTestSpec {
 
-  private def loadTestData(spark: SparkSession): DataFrame = spark.read
-    .format("csv")
-    .option("header", "true")
-    .option("inferSchema", "true")
-    .load("src/test/resources/ecommerce100K_2019_Oct.csv")
-    .distinct()
+  private def loadTestData(spark: SparkSession): DataFrame = {
+    var path = "ecommerce100K_2019_Oct.csv"
+    if (K8sRunner.isWasb) {
+      path = "wasb://datasets@blobqsql.blob.core.windows.net/" + path
+    } else {
+      path = "src/test/resources/" + path
+    }
+    spark.read
+      .format("csv")
+      .option("header", "true")
+      .option("inferSchema", "true")
+      .load(path)
+      .distinct()
+  }
 
   private def writeTestData(
       data: DataFrame,
@@ -196,11 +205,17 @@ class QbeastDataSourceIntegrationTest extends QbeastIntegrationTestSpec {
         val cubeSize = 10000
         writeTestData(data, columnsToIndex, cubeSize, tmpDir)
 
+        var path = "ecommerce300k_2019_Nov.csv"
+        if (K8sRunner.isWasb) {
+          path = "wasb://datasets@blobqsql.blob.core.windows.net/" + path
+        } else {
+          path = "src/test/resources/" + path
+        }
         val appendData = spark.read
           .format("csv")
           .option("header", "true")
           .option("inferSchema", "true")
-          .load("src/test/resources/ecommerce300k_2019_Nov.csv")
+          .load(path)
 
         appendData.write
           .mode("append")
