@@ -14,9 +14,6 @@ import org.apache.spark.sql.types.{
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-/**
- * Tests for [[QbeastColumns]].
- */
 class QbeastColumnsTest extends AnyFlatSpec with Matchers {
   "QbeastColumns" should "define column names starting with _qbeast" in {
     QbeastColumns.weightColumnName should startWith("_qbeast")
