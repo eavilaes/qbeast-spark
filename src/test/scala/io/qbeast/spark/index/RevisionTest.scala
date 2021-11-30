@@ -33,7 +33,7 @@ class RevisionTest
     val qbeastSnapshot = DeltaQbeastSnapshot(deltaLog.snapshot)
     val lastRevision = qbeastSnapshot.loadLatestRevision
     val dfqbeast = spark.read.format("qbeast").load(directory)
-    dfqbeast.createTempView("dfqbeast")
+    dfqbeast.createOrReplaceTempView("dfqbeast")
 
     lastRevision
   }
