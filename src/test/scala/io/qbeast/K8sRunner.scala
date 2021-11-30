@@ -1,5 +1,6 @@
 package io.qbeast
 
+import io.qbeast.context.QbeastContextTest
 import io.qbeast.spark.delta.{OTreeIndexTest, QbeastSnapshotTest}
 import io.qbeast.spark.index.writer.{BlockWriterTest, SparkDataWriterTest}
 import io.qbeast.spark.index._
@@ -58,8 +59,8 @@ object K8sRunner {
       }
 
       printf("Running tests\n")
-      // Tests fro io.qbeast.context
-      // run(new QbeastContextTest())
+      // Tests for io.qbeast.context
+      run(new QbeastContextTest())
 
       // Tests for io.qbeast.spark.delta
       run(new OTreeIndexTest())
