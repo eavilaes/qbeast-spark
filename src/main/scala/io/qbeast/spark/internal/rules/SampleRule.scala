@@ -3,25 +3,19 @@
  */
 package io.qbeast.spark.internal.rules
 
-import io.qbeast.model.Weight
+import io.qbeast.core.model.Weight
 import io.qbeast.spark.internal.expressions.QbeastMurmur3Hash
 import io.qbeast.spark.internal.sources.QbeastBaseRelation
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.catalyst.expressions.{
-  And,
-  GreaterThanOrEqual,
-  LessThan,
-  Literal,
-  NamedExpression
-}
+import org.apache.spark.sql.catalyst.expressions.{And, GreaterThanOrEqual, LessThan, Literal}
 import org.apache.spark.sql.catalyst.plans.logical.{Filter, LogicalPlan, Project, Sample}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.datasources.LogicalRelation
 import org.apache.spark.sql.SparkSession
-import io.qbeast.model.WeightRange
+import io.qbeast.core.model.WeightRange
 
 /**
- * Rule class that transforms a Sample operator over a Qbeast Relation
+ * Rule class that transforms a Sample operator over a QbeastRelation
  * into a suitable Filter for Qbeast
  * @param spark The current SparkSession
  */
@@ -39,42 +33,48 @@ class SampleRule(spark: SparkSession) extends Rule[LogicalPlan] with Logging {
   }
 
   /**
-   * Transforms the Sample Operator to a Filter if suited
+   * Transforms the Sample Operator to a Filter
    * @param sample the Sample Operator
-   * @param logicalRelation the relation underneath
-   * @return the new LogicalPlan containing the Filter
+   * @param logicalRelation the LogicalRelation underneath
+   * @param qbeastBaseRelation the wrapped QbeastBaseRelation
+   * @return the new Filter
    */
-  def transformSampleToFilter(sample: Sample, logicalRelation: LogicalRelation): LogicalPlan = {
+  private def transformSampleToFilter(
+      sample: Sample,
+      logicalRelation: LogicalRelation,
+      qbeastBaseRelation: QbeastBaseRelation): Filter = {
 
-    logicalRelation match {
-      case LogicalRelation(q: QbeastBaseRelation, output, _, _) =>
-        val weightRange = extractWeightRange(sample)
+    val weightRange = extractWeightRange(sample)
 
-        val columns =
-          q.columnTransformers.map(c => output.find(_.name == c.columnName).get)
-        val qbeastHash = new QbeastMurmur3Hash(columns)
-        val filter = And(
-          LessThan(qbeastHash, Literal(weightRange.to.value)),
-          GreaterThanOrEqual(qbeastHash, Literal(weightRange.from.value)))
-        Filter(filter, logicalRelation)
+    val columns =
+      qbeastBaseRelation.columnTransformers.map(c =>
+        logicalRelation.output.find(_.name == c.columnName).get)
+    val qbeastHash = new QbeastMurmur3Hash(columns)
 
-      case _ => sample
-
-    }
+    Filter(
+      And(
+        LessThan(qbeastHash, Literal(weightRange.to.value)),
+        GreaterThanOrEqual(qbeastHash, Literal(weightRange.from.value))),
+      sample.child)
 
   }
 
   override def apply(plan: LogicalPlan): LogicalPlan = {
-    plan transformDown {
+    plan transformDown { case s @ Sample(_, _, false, _, child) =>
+      child match {
+        case QbeastRelation(l, q) => transformSampleToFilter(s, l, q)
 
-      case s @ Sample(_, _, false, _, l: LogicalRelation) => transformSampleToFilter(s, l)
+        case Project(_, Filter(_, QbeastRelation(l, q))) =>
+          transformSampleToFilter(s, l, q)
 
-      case s @ Sample(_, _, false, _, child) =>
-        child match {
-          case ProjectionFilter(l: LogicalRelation, projectList) =>
-            Project(projectList, transformSampleToFilter(s, l))
-          case _ => s
-        }
+        case Filter(_, QbeastRelation(l, q)) =>
+          transformSampleToFilter(s, l, q)
+
+        case Project(_, QbeastRelation(l, q)) =>
+          transformSampleToFilter(s, l, q)
+
+        case _ => s
+      }
 
     }
   }
@@ -82,14 +82,12 @@ class SampleRule(spark: SparkSession) extends Rule[LogicalPlan] with Logging {
 }
 
 /**
- * Qbeast Projection Filter combination
+ * QbeastRelation matching pattern
  */
-object ProjectionFilter {
+object QbeastRelation {
 
-  def unapply(plan: LogicalPlan): Option[(LogicalRelation, Seq[NamedExpression])] = plan match {
-    case Project(projectList, Filter(_, l: LogicalRelation)) => Some((l, projectList))
-    case Filter(_, l: LogicalRelation) => Some((l, l.output))
-    case Project(projectList, l: LogicalRelation) => Some((l, projectList))
+  def unapply(plan: LogicalPlan): Option[(LogicalRelation, QbeastBaseRelation)] = plan match {
+    case l @ LogicalRelation(q: QbeastBaseRelation, _, _, _) => Some((l, q))
     case _ => None
   }
 

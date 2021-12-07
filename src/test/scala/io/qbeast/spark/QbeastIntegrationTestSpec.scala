@@ -8,7 +8,7 @@ import com.typesafe.config.{Config, ConfigFactory}
 import io.qbeast.K8sRunner
 import io.qbeast.keeper.{Keeper, LocalKeeper}
 import io.qbeast.context.{QbeastContext, QbeastContextImpl}
-import io.qbeast.model.IndexManager
+import io.qbeast.core.model.IndexManager
 import io.qbeast.spark.delta.SparkDeltaMetadataManager
 import io.qbeast.spark.index.{SparkOTreeManager, SparkRevisionFactory}
 import io.qbeast.spark.index.writer.SparkDataWriter
@@ -34,6 +34,23 @@ import java.nio.file.Files
 trait QbeastIntegrationTestSpec extends AnyFlatSpec with Matchers with DatasetComparer {
   // This reduce the verbosity of Spark
   Logger.getLogger("org.apache").setLevel(Level.WARN)
+
+  def withExtendedSpark[T](testCode: SparkSession => T): T = {
+    val spark = SparkSession
+      .builder()
+      .master("local[8]")
+      .appName("QbeastDataSource")
+      .withExtensions(new QbeastSparkSessionExtension())
+      .config(
+        "spark.hadoop.fs.s3a.aws.credentials.provider",
+        "org.apache.hadoop.fs.s3a.AnonymousAWSCredentialsProvider")
+      .getOrCreate()
+    try {
+      testCode(spark)
+    } finally {
+      spark.close()
+    }
+  }
 
   def withSpark[T](testCode: SparkSession => T): T = {
     testCode(K8sRunner.spark)

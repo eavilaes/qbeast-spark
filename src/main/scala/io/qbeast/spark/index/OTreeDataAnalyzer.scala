@@ -4,13 +4,16 @@
 package io.qbeast.spark.index
 
 import com.typesafe.config.ConfigFactory
-import io.qbeast.model._
+import io.qbeast.core.model._
 import io.qbeast.spark.index.QbeastColumns.{cubeToReplicateColumnName, weightColumnName}
 import io.qbeast.spark.internal.QbeastFunctions.qbeastHash
 import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions.{col, udaf}
 import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
 
+/**
+ * Analyzes the data and extracts OTree structures
+ */
 trait OTreeDataAnalyzer {
 
   /**
@@ -45,18 +48,23 @@ object DoublePassOTreeDataAnalyzer extends OTreeDataAnalyzer with Serializable {
   private[index] def calculateRevisionChanges(
       data: DataFrame,
       revision: Revision): Option[RevisionChange] = {
+
     val columnStats = revision.columnTransformers.map(_.stats)
     val columnsExpr = columnStats.flatMap(_.columns)
-    // This is a actions that will be executed on the dataframe
-    val rows = data.selectExpr(columnsExpr: _*).collect()
-    if (rows.isEmpty) {
-      throw new RuntimeException(
-        "The DataFrame is empty, why are you trying ot index an empty dataset?")
-    }
-    val row = rows.head
-    val newTransformation =
-      revision.columnTransformers.map(_.makeTransformation(colName => row.getAs[Object](colName)))
+    def needStats = columnsExpr.nonEmpty
 
+    val newTransformation = if (!needStats) {
+      revision.columnTransformers.map(_.makeTransformation(identity))
+    } else {
+      // This is a actions that will be executed on the dataframe
+      val rows = data.selectExpr(columnsExpr: _*).collect()
+      if (rows.isEmpty) {
+        throw new RuntimeException(
+          "The DataFrame is empty, why are you trying to index an empty dataset?")
+      }
+      val row = rows.head
+      revision.columnTransformers.map(_.makeTransformation(colName => row.getAs[Object](colName)))
+    }
     val transformationDelta = if (revision.transformations.isEmpty) {
       newTransformation.map(a => Some(a))
     } else {
@@ -172,13 +180,6 @@ object DoublePassOTreeDataAnalyzer extends OTreeDataAnalyzer with Serializable {
         })
     }
 
-  // ANALYZE METHODS
-  /**
-   * @param dataFrame
-   * @param indexStatus
-   * @param isReplication
-   * @return
-   */
   override def analyze(
       dataFrame: DataFrame,
       indexStatus: IndexStatus,

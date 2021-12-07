@@ -3,7 +3,7 @@
  */
 package io.qbeast.spark.index
 
-import io.qbeast.model.{CubeId, PointWeightIndexer, TableChanges, Weight}
+import io.qbeast.core.model.{CubeId, PointWeightIndexer, TableChanges, Weight}
 import io.qbeast.spark.index.QbeastColumns.{
   cubeColumnName,
   cubeToReplicateColumnName,
@@ -45,7 +45,7 @@ private class SparkPointWeightIndexer(tableChanges: TableChanges, isReplication:
     extends Serializable {
 
   val pointIndexer: PointWeightIndexer =
-    PointWeightIndexer.buildNewWeightIndexer(tableChanges.indexChanges)
+    PointWeightIndexer(tableChanges.indexChanges)
 
   val pwiBC: Broadcast[PointWeightIndexer] =
     SparkSession.active.sparkContext.broadcast(pointIndexer)
