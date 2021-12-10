@@ -6,12 +6,13 @@ package io.qbeast.spark
 import com.github.mrpowers.spark.fast.tests.DatasetComparer
 import com.typesafe.config.{Config, ConfigFactory}
 import io.qbeast.K8sRunner
-import io.qbeast.keeper.{Keeper, LocalKeeper}
+import io.qbeast.core.keeper.{Keeper, LocalKeeper}
 import io.qbeast.context.{QbeastContext, QbeastContextImpl}
 import io.qbeast.core.model.IndexManager
 import io.qbeast.spark.delta.SparkDeltaMetadataManager
 import io.qbeast.spark.index.{SparkOTreeManager, SparkRevisionFactory}
 import io.qbeast.spark.index.writer.SparkDataWriter
+import io.qbeast.spark.internal.QbeastSparkSessionExtension
 import io.qbeast.spark.table.IndexedTableFactoryImpl
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.sql.{DataFrame, SparkSession}

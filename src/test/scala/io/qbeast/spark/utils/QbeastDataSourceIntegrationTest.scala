@@ -3,7 +3,7 @@
  */
 package io.qbeast.spark.utils
 
-import io.qbeast.model.CubeId
+import io.qbeast.core.model.CubeId
 import io.qbeast.K8sRunner
 import io.qbeast.spark.{QbeastIntegrationTestSpec, QbeastTable}
 import io.qbeast.spark.delta.OTreeIndex
