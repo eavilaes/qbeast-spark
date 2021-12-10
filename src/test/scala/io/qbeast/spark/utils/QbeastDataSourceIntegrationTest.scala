@@ -171,13 +171,12 @@ class QbeastDataSourceIntegrationTest extends QbeastIntegrationTestSpec {
 
         val executionPlan = query.queryExecution.executedPlan.collectLeaves()
 
-        assert(
-          executionPlan.exists(p =>
-            p
-              .asInstanceOf[FileSourceScanExec]
-              .relation
-              .location
-              .isInstanceOf[OTreeIndex]))
+        executionPlan.exists(p =>
+          p
+            .asInstanceOf[FileSourceScanExec]
+            .relation
+            .location
+            .isInstanceOf[OTreeIndex]) shouldBe true
 
         val filesDeltaQuery =
           deltaQuery
@@ -192,7 +191,7 @@ class QbeastDataSourceIntegrationTest extends QbeastIntegrationTestSpec {
           .collect()
 
         filesQbeastQuery.length shouldBe <=(filesDeltaQuery.length)
-        filesQbeastQuery.foreach(f => assert(filesDeltaQuery.contains(f)))
+        filesQbeastQuery.foreach(f => filesDeltaQuery should contain(f))
 
       }
     }
