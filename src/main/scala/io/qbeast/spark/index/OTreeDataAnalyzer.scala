@@ -4,7 +4,10 @@
 package io.qbeast.spark.index
 
 import com.typesafe.config.ConfigFactory
+import io.qbeast.IISeq
+import io.qbeast.context.QbeastContext
 import io.qbeast.core.model._
+import io.qbeast.core.transform.{ColumnStats, Transformer}
 import io.qbeast.spark.index.QbeastColumns.{cubeToReplicateColumnName, weightColumnName}
 import io.qbeast.spark.internal.QbeastFunctions.qbeastHash
 import org.apache.spark.sql.expressions.UserDefinedFunction
@@ -46,25 +49,13 @@ object DoublePassOTreeDataAnalyzer extends OTreeDataAnalyzer with Serializable {
   private lazy val logger = org.apache.log4j.LogManager.getLogger(this.getClass)
 
   private[index] def calculateRevisionChanges(
-      data: DataFrame,
+      columnStats: Seq[ColumnStats],
       revision: Revision): Option[RevisionChange] = {
 
-    val columnStats = revision.columnTransformers.map(_.stats)
-    val columnsExpr = columnStats.flatMap(_.columns)
-    def needStats = columnsExpr.nonEmpty
-
-    val newTransformation = if (!needStats) {
-      revision.columnTransformers.map(_.makeTransformation(identity))
-    } else {
-      // This is a actions that will be executed on the dataframe
-      val rows = data.selectExpr(columnsExpr: _*).collect()
-      if (rows.isEmpty) {
-        throw new RuntimeException(
-          "The DataFrame is empty, why are you trying to index an empty dataset?")
-      }
-      val row = rows.head
-      revision.columnTransformers.map(_.makeTransformation(colName => row.getAs[Object](colName)))
+    val newTransformation = revision.columnTransformers.zip(columnStats).map { case (ct, cs) =>
+      ct.makeTransformation(cs)
     }
+
     val transformationDelta = if (revision.transformations.isEmpty) {
       newTransformation.map(a => Some(a))
     } else {
@@ -115,18 +106,32 @@ object DoublePassOTreeDataAnalyzer extends OTreeDataAnalyzer with Serializable {
         }
     }
 
-  private[index] def estimatePartitionCubeSize(
+  /**
+   * Estimates the groupCubeSize depending on the input parameters.
+   * The formula to compute the estimated value is the following:
+   *   numGroups = MAX(numPartitions, (numElements / cubeWeightsBufferCapacity))
+   *   groupCubeSize = desiredCubeSize / numGroups
+   * @param desiredCubeSize the desired cube size
+   * @param numPartitions the number of partitions
+   * @param numElements the total number of elements in the input data
+   * @param cubeWeightsBufferCapacity buffer capacity; number of elements that fit in memory
+   * @return the estimated groupCubeSize as a Double.
+   */
+  private[index] def estimateGroupCubeSize(
       desiredCubeSize: Int,
-      numPartitions: Int): Double = {
-    if (numPartitions > 0) {
-      val desiredPartitionCubeSize =
-        Math.ceil(desiredCubeSize.toDouble / numPartitions + 1) // Round to the next value
-      if (desiredPartitionCubeSize < minPartitionCubeSize) {
+      numPartitions: Int,
+      numElements: Long,
+      cubeWeightsBufferCapacity: Long): Double = {
+    val numGroups = Math.max(numPartitions, numElements / cubeWeightsBufferCapacity)
+    if (numGroups > 0) {
+      val groupCubeSize =
+        Math.ceil(desiredCubeSize.toDouble / numGroups + 1)
+      if (groupCubeSize < minPartitionCubeSize) {
         logger.warn(
           s"Cube size per partition is less than $minPartitionCubeSize," +
             s" Set a bigger cubeSize before writing")
         minPartitionCubeSize
-      } else desiredPartitionCubeSize
+      } else groupCubeSize
     } else {
       // TODO should fail if the desiredCubeSize is < than minPartitionCubeSize?
       Math.max(desiredCubeSize, minPartitionCubeSize)
@@ -137,7 +142,8 @@ object DoublePassOTreeDataAnalyzer extends OTreeDataAnalyzer with Serializable {
   private[index] def estimatePartitionCubeWeights(
       revision: Revision,
       indexStatus: IndexStatus,
-      isReplication: Boolean): DataFrame => Dataset[CubeNormalizedWeight] =
+      isReplication: Boolean,
+      stats: Seq[ColumnStats]): DataFrame => Dataset[CubeNormalizedWeight] =
     (weightedDataFrame: DataFrame) => {
 
       val spark = SparkSession.active
@@ -155,21 +161,29 @@ object DoublePassOTreeDataAnalyzer extends OTreeDataAnalyzer with Serializable {
       // set it to minCubeSize
       val numPartitions: Int = weightedDataFrame.rdd.getNumPartitions
       val desiredCubeSize: Int = indexStatus.revision.desiredCubeSize
-      val desiredPartitionCubeSize =
-        estimatePartitionCubeSize(desiredCubeSize, numPartitions)
+      val estimatedGroupCubeSize =
+        estimateGroupCubeSize(
+          desiredCubeSize = desiredCubeSize,
+          numPartitions = numPartitions,
+          numElements = stats.head.count,
+          cubeWeightsBufferCapacity =
+            QbeastContext.config.getLong("qbeast.index.cubeWeightsBufferCapacity"))
 
-      weightedDataFrame
+      val selected = weightedDataFrame
         .select(cols.map(col): _*)
+      val weightIndex = selected.schema.fieldIndex(weightColumnName)
+      val cubeWeightsBufferCapacity =
+        QbeastContext.config.getLong("qbeast.index.cubeWeightsBufferCapacity")
+      selected
         .mapPartitions(rows => {
           val weights =
             new CubeWeightsBuilder(
-              desiredCubeSize = desiredCubeSize,
-              boostSize = desiredPartitionCubeSize,
-              indexStatus.announcedSet,
-              indexStatus.replicatedSet)
+              indexStatus = indexStatus,
+              boostSize = estimatedGroupCubeSize,
+              cubeWeightsBufferCapacity)
           rows.foreach { row =>
             val point = RowUtils.rowValuesToPoint(row, revision)
-            val weight = Weight(row.getAs[Int](weightColumnName))
+            val weight = Weight(row.getAs[Int](weightIndex))
             if (isReplication) {
               val parentBytes = row.getAs[Array[Byte]](cubeToReplicateColumnName)
               val parent = Some(revision.createCubeId(parentBytes))
@@ -180,14 +194,41 @@ object DoublePassOTreeDataAnalyzer extends OTreeDataAnalyzer with Serializable {
         })
     }
 
+  def getColumnStats(
+      dataFrame: DataFrame,
+      columnTransformers: IISeq[Transformer]): Seq[ColumnStats] = {
+    val dataFrameStats = dataFrame
+      .describe(columnTransformers.map(_.columnName): _*)
+      .collect()
+
+    columnTransformers
+      .map(ct => {
+        val s = dataFrameStats
+          .map(row => {
+            (row.getAs[String](0), row.getAs[String](ct.columnName))
+          })
+          .toMap
+        ColumnStats(s, ct.dataType)
+      })
+  }
+
   override def analyze(
       dataFrame: DataFrame,
       indexStatus: IndexStatus,
       isReplication: Boolean): (DataFrame, TableChanges) = {
 
+    // Compute the statistics for the indexedColumns
+    val columnStats = getColumnStats(dataFrame, indexStatus.revision.columnTransformers)
+
+    // Check if the DataFrame is empty
+    if (columnStats.head.count == 0) {
+      throw new RuntimeException(
+        "The DataFrame is empty. Are you trying to index an empty dataset?")
+    }
+
     val spaceChanges =
       if (isReplication) None
-      else calculateRevisionChanges(dataFrame, indexStatus.revision)
+      else calculateRevisionChanges(columnStats, indexStatus.revision)
 
     // The revision to use
     val revision = spaceChanges match {
@@ -203,7 +244,7 @@ object DoublePassOTreeDataAnalyzer extends OTreeDataAnalyzer with Serializable {
 
     // Second, estimate the cube weights at partition level
     val partitionedEstimatedCubeWeights = weightedDataFrame.transform(
-      estimatePartitionCubeWeights(revision, indexStatus, isReplication))
+      estimatePartitionCubeWeights(revision, indexStatus, isReplication, columnStats))
 
     // Third, compute the overall estimated cube weights
     val estimatedCubeWeights =

@@ -7,24 +7,36 @@ import scala.collection.mutable
 /**
  * Builder for creating cube weights.
  *
- * @param desiredCubeSize the desired cube size
- * @param boostSize       the boost size
- * @param announcedSet the announced cube identifiers
- * @param replicatedSet the replicated cube identifiers
+ * @param desiredCubeSize           the desired cube size
+ * @param boostSize                 the boost size
+ * @param cubeWeightsBufferCapacity the buffer capacity to store the cube weights in memory
+ * @param announcedSet              the announced cube identifiers
+ * @param replicatedSet             the replicated cube identifiers
  */
 class CubeWeightsBuilder(
     private val desiredCubeSize: Int,
     private val boostSize: Double,
+    private val cubeWeightsBufferCapacity: Long,
     announcedSet: Set[CubeId] = Set.empty,
     replicatedSet: Set[CubeId] = Set.empty)
     extends Serializable {
+
+  def this(indexStatus: IndexStatus, boostSize: Double, cubeWeightsBufferCapacity: Long) =
+    this(
+      indexStatus.revision.desiredCubeSize,
+      boostSize,
+      cubeWeightsBufferCapacity,
+      indexStatus.announcedSet,
+      indexStatus.replicatedSet)
+
   private val byWeight = Ordering.by[PointWeightAndParent, Weight](_.weight).reverse
-  private val queue = new mutable.PriorityQueue[PointWeightAndParent]()(byWeight)
+  protected val queue = new mutable.PriorityQueue[PointWeightAndParent]()(byWeight)
+  private var resultBuffer = Seq.empty[CubeNormalizedWeight]
 
   /**
    * Updates the builder with given point with weight.
    *
-   * @param point the point
+   * @param point  the point
    * @param weight the weight
    * @param parent the parent cube identifier used to find
    *               the container cube if available
@@ -32,6 +44,10 @@ class CubeWeightsBuilder(
    */
   def update(point: Point, weight: Weight, parent: Option[CubeId] = None): CubeWeightsBuilder = {
     queue.enqueue(PointWeightAndParent(point, weight, parent))
+    if (queue.size >= cubeWeightsBufferCapacity) {
+      resultBuffer ++= result()
+      queue.clear()
+    }
     this
   }
 
@@ -41,6 +57,10 @@ class CubeWeightsBuilder(
    * @return the resulting cube weights map
    */
   def result(): Seq[CubeNormalizedWeight] = {
+    resultInternal() ++ resultBuffer
+  }
+
+  def resultInternal(): Seq[CubeNormalizedWeight] = {
     val weights = mutable.Map.empty[CubeId, WeightAndCount]
     while (queue.nonEmpty) {
       val PointWeightAndParent(point, weight, parent) = queue.dequeue()
@@ -54,9 +74,7 @@ class CubeWeightsBuilder(
         val weightAndCount = weights.getOrElseUpdate(cubeId, new WeightAndCount(MaxValue, 0))
         if (weightAndCount.count < boostSize) {
           weightAndCount.count += 1
-          if (weightAndCount.count >= desiredCubeSize) {
-            weightAndCount.weight = weight
-          } else if (weightAndCount.count == boostSize) {
+          if (weightAndCount.count >= desiredCubeSize || weightAndCount.count == boostSize) {
             weightAndCount.weight = weight
           }
           continue = announcedSet.contains(cubeId) || replicatedSet.contains(cubeId)
@@ -82,23 +100,23 @@ class CubeWeightsBuilder(
  * Weight and count.
  *
  * @param weight the weight
- * @param count the count
+ * @param count  the count
  */
 private class WeightAndCount(var weight: Weight, var count: Int)
 
 /**
  * Point, weight and parent cube identifier if available.
  *
- * @param point the point
+ * @param point  the point
  * @param weight the weight
  * @param parent the parent
  */
-private case class PointWeightAndParent(point: Point, weight: Weight, parent: Option[CubeId])
+protected case class PointWeightAndParent(point: Point, weight: Weight, parent: Option[CubeId])
 
 /**
  * Cube and NormalizedWeight
  *
- * @param cubeBytes the cube
+ * @param cubeBytes        the cube
  * @param normalizedWeight the weight
  */
 case class CubeNormalizedWeight(cubeBytes: Array[Byte], normalizedWeight: NormalizedWeight)
