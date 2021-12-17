@@ -4,7 +4,6 @@
 package io.qbeast.spark
 
 import com.github.mrpowers.spark.fast.tests.DatasetComparer
-import com.typesafe.config.{Config, ConfigFactory}
 import io.qbeast.K8sRunner
 import io.qbeast.core.keeper.{Keeper, LocalKeeper}
 import io.qbeast.context.{QbeastContext, QbeastContextImpl}
@@ -15,6 +14,7 @@ import io.qbeast.spark.index.writer.SparkDataWriter
 import io.qbeast.spark.internal.QbeastSparkSessionExtension
 import io.qbeast.spark.table.IndexedTableFactoryImpl
 import org.apache.log4j.{Level, Logger}
+import org.apache.spark.SparkConf
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -97,8 +97,9 @@ trait QbeastIntegrationTestSpec extends AnyFlatSpec with Matchers with DatasetCo
    * @tparam T the test result type
    * @return the test result
    */
-  def withQbeastContext[T](keeper: Keeper = LocalKeeper, config: Config = ConfigFactory.load())(
-      testCode: => T): T = {
+  def withQbeastContext[T](
+      keeper: Keeper = LocalKeeper,
+      config: SparkConf = SparkSession.active.sparkContext.getConf)(testCode: => T): T = {
     val indexedTableFactory = new IndexedTableFactoryImpl(
       keeper,
       SparkOTreeManager,
