@@ -3,13 +3,12 @@
  */
 package io.qbeast.spark.index
 
-import com.typesafe.config.ConfigFactory
 import io.qbeast.IISeq
-import io.qbeast.context.QbeastContext
 import io.qbeast.core.model._
 import io.qbeast.core.transform.{ColumnStats, Transformer}
 import io.qbeast.spark.index.QbeastColumns.{cubeToReplicateColumnName, weightColumnName}
 import io.qbeast.spark.internal.QbeastFunctions.qbeastHash
+import org.apache.spark.qbeast.config.{CUBE_WEIGHTS_BUFFER_CAPACITY, MIN_PARTITION_CUBE_SIZE}
 import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions.{col, udaf}
 import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
@@ -43,8 +42,7 @@ object DoublePassOTreeDataAnalyzer extends OTreeDataAnalyzer with Serializable {
   /**
    * The minimum cube size per partition registered in configuration
    */
-  private val minPartitionCubeSize: Int =
-    ConfigFactory.load().getInt("qbeast.index.minPartitionCubeSize")
+  private val minPartitionCubeSize: Int = MIN_PARTITION_CUBE_SIZE
 
   private lazy val logger = org.apache.log4j.LogManager.getLogger(this.getClass)
 
@@ -166,21 +164,18 @@ object DoublePassOTreeDataAnalyzer extends OTreeDataAnalyzer with Serializable {
           desiredCubeSize = desiredCubeSize,
           numPartitions = numPartitions,
           numElements = stats.head.count,
-          cubeWeightsBufferCapacity =
-            QbeastContext.config.getLong("qbeast.index.cubeWeightsBufferCapacity"))
+          cubeWeightsBufferCapacity = CUBE_WEIGHTS_BUFFER_CAPACITY)
 
       val selected = weightedDataFrame
         .select(cols.map(col): _*)
       val weightIndex = selected.schema.fieldIndex(weightColumnName)
-      val cubeWeightsBufferCapacity =
-        QbeastContext.config.getLong("qbeast.index.cubeWeightsBufferCapacity")
       selected
         .mapPartitions(rows => {
           val weights =
             new CubeWeightsBuilder(
               indexStatus = indexStatus,
               boostSize = estimatedGroupCubeSize,
-              cubeWeightsBufferCapacity)
+              CUBE_WEIGHTS_BUFFER_CAPACITY)
           rows.foreach { row =>
             val point = RowUtils.rowValuesToPoint(row, revision)
             val weight = Weight(row.getAs[Int](weightIndex))
