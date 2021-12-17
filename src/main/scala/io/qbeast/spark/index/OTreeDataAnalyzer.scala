@@ -4,12 +4,11 @@
 package io.qbeast.spark.index
 
 import io.qbeast.IISeq
-import io.qbeast.context.QbeastContext
 import io.qbeast.core.model._
 import io.qbeast.core.transform.{ColumnStats, Transformer}
 import io.qbeast.spark.index.QbeastColumns.{cubeToReplicateColumnName, weightColumnName}
 import io.qbeast.spark.internal.QbeastFunctions.qbeastHash
-import org.apache.spark.qbeast.config.MIN_PARTITION_CUBE_SIZE
+import org.apache.spark.qbeast.config.{CUBE_WEIGHTS_BUFFER_CAPACITY, MIN_PARTITION_CUBE_SIZE}
 import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions.{col, udaf}
 import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
@@ -165,14 +164,12 @@ object DoublePassOTreeDataAnalyzer extends OTreeDataAnalyzer with Serializable {
           desiredCubeSize = desiredCubeSize,
           numPartitions = numPartitions,
           numElements = stats.head.count,
-          cubeWeightsBufferCapacity =
-            QbeastContext.config.getLong("qbeast.index.cubeWeightsBufferCapacity"))
+          cubeWeightsBufferCapacity = CUBE_WEIGHTS_BUFFER_CAPACITY)
 
       val selected = weightedDataFrame
         .select(cols.map(col): _*)
       val weightIndex = selected.schema.fieldIndex(weightColumnName)
-      val cubeWeightsBufferCapacity =
-        QbeastContext.config.getLong("qbeast.index.cubeWeightsBufferCapacity")
+      val cubeWeightsBufferCapacity = CUBE_WEIGHTS_BUFFER_CAPACITY
       selected
         .mapPartitions(rows => {
           val weights =

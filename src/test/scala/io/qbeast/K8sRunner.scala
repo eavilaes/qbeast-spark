@@ -31,7 +31,7 @@ object K8sRunner {
     printf("\nCREATING SPARK SESSION\n")
     SparkSession
       .builder()
-      .master("spark://spark-headless:7077")
+      .master(sparkMaster)
       .appName("QbeastDataSource")
       .config(
         "spark.jars.packages",

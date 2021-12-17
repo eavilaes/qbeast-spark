@@ -20,7 +20,6 @@ lazy val qbeastSpark = (project in file("."))
     assembly / test := {},
     assembly / assemblyOption := (assembly / assemblyOption).value.copy(includeScala = false),
     Test / publishArtifact := true)
-    publish / skip := true)
   .settings(noWarningInConsole)
 
 lazy val qbeastSparkNodep = (project in file("nodep"))
