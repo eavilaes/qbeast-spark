@@ -65,7 +65,7 @@ object QbeastContext
 
   // Override methods from QbeastContext
 
-  override def config: SparkConf = SparkSession.active.sparkContext.getConf
+  override def config: SparkConf = current.config
 
   override def keeper: Keeper = LocalKeeper
 
